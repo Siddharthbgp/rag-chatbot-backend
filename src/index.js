@@ -77,18 +77,18 @@ io.on('connection', (socket) => {
     socket.emit('newSession', { sessionId: newSessionId });
     console.log('Reset session, new session created:', newSessionId);
   });
+});
 
-  app.get('/api/history/:sessionId', async (req, res) => {
-    const historyKey = `chat:${req.params.sessionId}`;
-    const history = await redisClient.lRange(historyKey, 0, -1);
-    res.json(history.map(JSON.parse));
-  });
+app.get('/api/history/:sessionId', async (req, res) => {
+  const historyKey = `chat:${req.params.sessionId}`;
+  const history = await redisClient.lRange(historyKey, 0, -1);
+  res.json(history.map(JSON.parse));
+});
 
-  app.delete('/api/clear/:sessionId', async (req, res) => {
-    const historyKey = `chat:${req.params.sessionId}`;
-    await redisClient.del(historyKey);
-    res.json({ message: 'Session cleared' });
-  });
+app.delete('/api/clear/:sessionId', async (req, res) => {
+  const historyKey = `chat:${req.params.sessionId}`;
+  await redisClient.del(historyKey);
+  res.json({ message: 'Session cleared' });
 });
 
 const PORT = process.env.PORT || 5000;
