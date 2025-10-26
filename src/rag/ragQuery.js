@@ -6,11 +6,9 @@ require('dotenv').config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-const client = new QdrantClient({
-  host: process.env.QDRANT_HOST || 'localhost',
-  port: process.env.QDRANT_PORT || 6333,
-  checkCompatibility: false,
-});
+// Use QDRANT_URL if provided, fallback to host/port
+const qdrantUrl = process.env.QDRANT_URL || `http://${process.env.QDRANT_HOST || 'localhost'}:${process.env.QDRANT_PORT || 6333}`;
+const client = new QdrantClient({ url: qdrantUrl });
 
 async function* queryRAGStream(query) {
   try {
@@ -27,7 +25,7 @@ async function* queryRAGStream(query) {
     console.log('Query embedding generated, length:', queryEmbedding.length);
 
     // Search Qdrant for relevant passages
-    const searchResults = await client.search('news', {
+    const searchResults = await client.search(process.env.QDRANT_COLLECTION || 'news', {
       vector: queryEmbedding,
       limit: 5,
     });

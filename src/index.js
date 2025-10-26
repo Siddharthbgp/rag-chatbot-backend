@@ -2,94 +2,84 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const cors = require('cors');
+const { queryRAGStream } = require('./rag/ragQuery');
 const redis = require('redis');
-const { v4: uuidv4 } = require('uuid');
-const { queryRAGStream } = require('./rag/ragQuery'); // Updated to stream
+const crypto = require('crypto');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
+const io = new Server(server);
+
+// Redis client setup for Upstash with TLS and proper error handling
+const redisClient = redis.createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379',
+  tls: { rejectUnauthorized: false } // Upstash requires TLS, disable strict cert check for simplicity
 });
 
-app.use(cors());
-app.use(express.json());
+redisClient.on('error', (err) => {
+  console.error('Redis Client Error:', err.message);
+});
 
-const redisClient = redis.createClient({ url: process.env.REDIS_URL });
-redisClient.connect().catch(console.error);
+redisClient.on('connect', () => {
+  console.log('Connected to Redis');
+});
+
+(async () => {
+  try {
+    await redisClient.connect();
+  } catch (err) {
+    console.error('Failed to connect to Redis:', err.message);
+  }
+})();
+
+app.use(express.json());
 
 io.on('connection', (socket) => {
   console.log('User connected');
 
   socket.on('sendMessage', async ({ sessionId, query }) => {
-    console.log('Received message:', { sessionId, query });
-    if (!sessionId) {
-      sessionId = uuidv4();
-      socket.emit('newSession', { sessionId });
-      console.log('New session created:', sessionId);
+    let currentSessionId = sessionId;
+    if (!currentSessionId) {
+      currentSessionId = crypto.randomUUID();
+      socket.emit('newSession', { sessionId: currentSessionId });
+      console.log('New session created:', currentSessionId);
     }
 
-    // Append user message to history
-    const historyKey = `chat:${sessionId}`;
-    await redisClient.rPush(historyKey, JSON.stringify({ role: 'user', content: query }));
-    await redisClient.expire(historyKey, 3600); // TTL 1 hour
-
-    // Start bot response (empty initially)
     let fullResponse = '';
-    await redisClient.rPush(historyKey, JSON.stringify({ role: 'bot', content: '' }));
-
     try {
-      // Get stream from RAG
       const stream = await queryRAGStream(query);
       for await (const chunk of stream) {
-        const textChunk = chunk.text() || ''; // Use text() from Gemini chunk
+        const textChunk = chunk.text() || '';
         fullResponse += textChunk;
-        socket.emit('responseChunk', { sessionId, chunk: textChunk });
+        socket.emit('responseChunk', { sessionId: currentSessionId, chunk: textChunk });
         console.log('Sent response chunk:', textChunk);
       }
-
-      // Update final bot message in Redis
-      const history = await redisClient.lRange(historyKey, 0, -1);
-      const updatedHistory = history.map(JSON.parse);
-      updatedHistory[updatedHistory.length - 1].content = fullResponse;
-      await redisClient.del(historyKey);
-      for (const msg of updatedHistory) {
-        await redisClient.rPush(historyKey, JSON.stringify(msg));
+      // Update Redis history with error handling
+      try {
+        await redisClient.set(`session:${currentSessionId}`, fullResponse);
+        console.log('Updated Redis history for session:', currentSessionId);
+      } catch (redisErr) {
+        console.error('Redis update failed:', redisErr.message);
       }
-      await redisClient.expire(historyKey, 3600);
-      console.log('Updated Redis history for session:', sessionId);
     } catch (error) {
-      console.error('Error processing query:', error.message);
-      socket.emit('responseChunk', { sessionId, chunk: 'Error processing your query' });
+      console.error('RAG query error:', error.message);
+      socket.emit('responseChunk', { sessionId: currentSessionId, chunk: 'Error processing your query' });
     }
   });
 
-  // Add reset session handler
-  socket.on('resetSession', async () => {
-    const currentSessionId = socket.handshake.query.sessionId || null;
-    if (currentSessionId) {
-      const historyKey = `chat:${currentSessionId}`;
-      await redisClient.del(historyKey); // Clear Redis history for the current session
-      console.log('Cleared Redis history for session:', currentSessionId);
-    }
-    const newSessionId = uuidv4();
+  socket.on('resetSession', () => {
+    const newSessionId = crypto.randomUUID();
     socket.emit('newSession', { sessionId: newSessionId });
-    console.log('Reset session, new session created:', newSessionId);
+    console.log('Reset session to:', newSessionId);
   });
-});
 
-app.get('/api/history/:sessionId', async (req, res) => {
-  const historyKey = `chat:${req.params.sessionId}`;
-  const history = await redisClient.lRange(historyKey, 0, -1);
-  res.json(history.map(JSON.parse));
-});
-
-app.delete('/api/clear/:sessionId', async (req, res) => {
-  const historyKey = `chat:${req.params.sessionId}`;
-  await redisClient.del(historyKey);
-  res.json({ message: 'Session cleared' });
+  socket.on('disconnect', () => {
+    console.log('User disconnected');
+  });
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
