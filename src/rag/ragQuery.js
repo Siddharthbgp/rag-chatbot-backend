@@ -6,13 +6,20 @@ require('dotenv').config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-// Robust Qdrant URL handling
+// Validate and set Qdrant URL with fallback
 let qdrantUrl = process.env.QDRANT_URL;
-if (!qdrantUrl || qdrantUrl.includes('<your-qdrant-instance>')) {
+if (!qdrantUrl || qdrantUrl.includes('<') || !qdrantUrl.startsWith('http')) {
   qdrantUrl = `http://${process.env.QDRANT_HOST || 'localhost'}:${process.env.QDRANT_PORT || 6333}`;
-  console.warn('QDRANT_URL invalid, falling back to:', qdrantUrl);
+  console.warn('Invalid QDRANT_URL detected, falling back to:', qdrantUrl);
 } else {
   console.log('Using QDRANT_URL:', qdrantUrl);
+}
+try {
+  new URL(qdrantUrl); // Validate URL
+} catch (e) {
+  console.error('Invalid QDRANT_URL format:', qdrantUrl, 'Error:', e.message);
+  qdrantUrl = `http://${process.env.QDRANT_HOST || 'localhost'}:${process.env.QDRANT_PORT || 6333}`;
+  console.warn('Falling back to:', qdrantUrl);
 }
 const client = new QdrantClient({ url: qdrantUrl });
 
