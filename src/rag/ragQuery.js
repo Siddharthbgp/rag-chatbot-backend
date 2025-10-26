@@ -6,8 +6,14 @@ require('dotenv').config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-// Use QDRANT_URL if provided, fallback to host/port
-const qdrantUrl = process.env.QDRANT_URL || `http://${process.env.QDRANT_HOST || 'localhost'}:${process.env.QDRANT_PORT || 6333}`;
+// Robust Qdrant URL handling
+let qdrantUrl = process.env.QDRANT_URL;
+if (!qdrantUrl || qdrantUrl.includes('<your-qdrant-instance>')) {
+  qdrantUrl = `http://${process.env.QDRANT_HOST || 'localhost'}:${process.env.QDRANT_PORT || 6333}`;
+  console.warn('QDRANT_URL invalid, falling back to:', qdrantUrl);
+} else {
+  console.log('Using QDRANT_URL:', qdrantUrl);
+}
 const client = new QdrantClient({ url: qdrantUrl });
 
 async function* queryRAGStream(query) {
